@@ -30,10 +30,6 @@ AI-based proctoring pipeline using MediaPipe for gaze/head-pose detection, YOLOv
 #### Webcam Capture Loop ✅
 Implemented basic OpenCV `VideoCapture` loop at 1280x720 with a rolling FPS overlay and clean exit handling.
 
-**Screenshot:** _(to be added once verified)_
-![Uploading Screenshot from 2026-08-28 00-44-01.png…]()
-
-
 ---
 
 ## Setup
