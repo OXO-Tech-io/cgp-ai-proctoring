@@ -1,5 +1,8 @@
 import time
 import cv2
+from vision.landmarks import FaceLandmarkerWrapper
+
+landmarker = FaceLandmarkerWrapper("/home/aanish/cgp-ai-proctoring/face_landmarker.task")
 
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
@@ -27,6 +30,8 @@ while cap.isOpened():
     fps = 1 / (curr_time - prev_time) if curr_time != prev_time else fps
     prev_time = curr_time
 
+    landmarker.detect(frame)
+
     cv2.putText(frame, f"FPS: {fps:.1f}", (30, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2 ,cv2.LINE_AA)
     
@@ -34,6 +39,7 @@ while cap.isOpened():
 
     if cv2.waitKey(1) & 0XFF == ord('q'):
         break
+
 
 cap.release()
 cv2.destroyAllWindows()
