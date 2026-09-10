@@ -11,14 +11,14 @@ landmarker = vision.FaceLandmarker.create_from_options(options)
 print("Loaded successfully")
 
 class FaceLandmarkerWrapper:
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str) -> None:
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceLandmarkerOptions(base_options=base_options)
         self.landmarker = vision.FaceLandmarker.create_from_options(options)
         print("Loaded successfully")
         self._timings = []
 
-    def detect(self, frame):
+    def detect(self, frame: cv2.Mat) -> list:
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
