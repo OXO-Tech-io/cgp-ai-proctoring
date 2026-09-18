@@ -6,8 +6,10 @@ Verify against official MediaPipe face mesh diagram before relying on these for 
 
 NOSE_TIP = 1
 CHIN = 152
+
 LEFT_EYE_OUTER_CORNER = 263
 RIGHT_EYE_OUTER_CORNER = 33
+
 LEFT_MOUTH_CORNER = 287
 RIGHT_MOUTH_CORNER = 57
 
