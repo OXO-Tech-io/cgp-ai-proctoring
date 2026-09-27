@@ -1,0 +1,255 @@
+from pathlib import Path
+
+
+REPORT_PATH = Path("validation/data/HP-09_validation_report.txt")
+
+
+def generate_report() -> str:
+    report = """
+============================================================
+HP-09 HEAD POSE VALIDATION — FINAL REPORT
+============================================================
+
+Validation Status
+------------------------------------------------------------
+Overall Status: PASS WITH OBSERVATIONS
+
+The head pose estimator successfully detected all six
+controlled head movements on the validation dataset.
+
+Production classification thresholds have NOT been
+established from this validation dataset.
+
+------------------------------------------------------------
+1. DATASET
+------------------------------------------------------------
+
+Dataset:
+  validation/data/pose_measurements.csv
+
+Total samples:
+  110
+
+Samples:
+  NEUTRAL_CALIBRATION : 50
+  TURN LEFT           : 10
+  TURN RIGHT          : 10
+  LOOK UP             : 10
+  LOOK DOWN           : 10
+  TILT LEFT           : 10
+  TILT RIGHT          : 10
+
+------------------------------------------------------------
+2. POSE CONSISTENCY
+------------------------------------------------------------
+
+The controlled movements produced clearly distinguishable
+primary-axis signals.
+
+TURN LEFT:
+  Primary axis: Yaw
+  Relative yaw: +33.73°
+
+TURN RIGHT:
+  Primary axis: Yaw
+  Relative yaw: -45.60°
+
+LOOK UP:
+  Primary axis: Pitch
+  Relative pitch: -19.12°
+
+LOOK DOWN:
+  Primary axis: Pitch
+  Relative pitch: +17.44°
+
+TILT LEFT:
+  Primary axis: Roll
+  Relative roll: -32.02°
+
+TILT RIGHT:
+  Primary axis: Roll
+  Relative roll: +32.59°
+
+All six intended movements were detected on their expected
+primary axis.
+
+------------------------------------------------------------
+3. FRAME-TO-FRAME JITTER
+------------------------------------------------------------
+
+Most movement tests showed stable frame-to-frame pose changes.
+
+Observed elevated jitter:
+
+LOOK UP:
+  Pitch mean absolute change: 1.151°
+  Maximum absolute change: 4.337°
+
+All other primary movement axes remained below the
+1.0° mean absolute change investigation boundary used
+for this validation analysis.
+
+Note:
+These thresholds are heuristic validation thresholds and
+are NOT production classification thresholds.
+
+------------------------------------------------------------
+4. CROSS-AXIS COUPLING
+------------------------------------------------------------
+
+Most movements showed limited cross-axis coupling.
+
+Observed investigation case:
+
+TILT RIGHT:
+  Primary axis: Roll
+  Relative roll: +32.59°
+  Yaw coupling: 66.6%
+
+Other observed coupling:
+
+TURN LEFT:
+  Pitch coupling: 27.1%
+
+TURN RIGHT:
+  Pitch coupling: 27.0%
+
+LOOK UP:
+  Yaw coupling: 17.2%
+
+LOOK DOWN:
+  Yaw coupling: 12.1%
+
+TILT LEFT:
+  Pitch coupling: 36.0%
+
+The TILT RIGHT result requires additional validation before
+determining whether the coupling originates from the pose
+estimator, camera geometry, subject movement, or the
+experimental setup.
+
+------------------------------------------------------------
+5. DETECTION LATENCY
+------------------------------------------------------------
+
+Overall face-landmark detection latency:
+
+  Mean   : 57.94 ms
+  Median : 56.94 ms
+  Std    : 7.19 ms
+  Min    : 32.71 ms
+  Max    : 92.38 ms
+  P95    : 68.60 ms
+  P99    : 82.70 ms
+
+Most tests remained around 57–59 ms mean detection latency.
+
+TILT RIGHT showed higher latency variability:
+
+  Mean   : 58.03 ms
+  Std    : 13.88 ms
+  Max    : 92.38 ms
+  P95    : 80.25 ms
+  P99    : 89.95 ms
+
+The latency measurement represents face-landmark detection
+time and does not represent complete end-to-end application
+latency.
+
+------------------------------------------------------------
+6. KEY OBSERVATIONS
+------------------------------------------------------------
+
+Observation 1:
+  LOOK UP produced higher pitch jitter than the other
+  controlled movements.
+
+Observation 2:
+  TILT RIGHT produced significant yaw cross-axis coupling.
+
+Observation 3:
+  TILT RIGHT also produced higher detection latency
+  variability.
+
+Observation 4:
+  All six intended movement directions produced detectable
+  primary-axis signals.
+
+Observation 5:
+  No catastrophic pose-estimation instability was observed
+  in this validation dataset.
+
+------------------------------------------------------------
+7. FINAL ASSESSMENT
+------------------------------------------------------------
+
+Status:
+
+  PASS WITH OBSERVATIONS
+
+The current head pose implementation demonstrates that the
+intended head movements can be detected consistently enough
+to continue validation.
+
+However, the current dataset is not sufficient to establish
+production classification thresholds or guarantee robustness
+across different users, camera positions, lighting conditions,
+or examination environments.
+
+No immediate modification to the head pose estimator is
+recommended based solely on this dataset.
+
+------------------------------------------------------------
+8. RECOMMENDED NEXT VALIDATION
+------------------------------------------------------------
+
+Before production classification:
+
+  1. Repeat the controlled movement tests across multiple
+     validation sessions.
+
+  2. Specifically re-test TILT RIGHT to investigate the
+     66.6% yaw coupling.
+
+  3. Repeat LOOK UP to investigate the elevated pitch jitter.
+
+  4. Test different face distances from the camera.
+
+  5. Test realistic lighting variations.
+
+  6. Test additional subjects if available.
+
+  7. Use the resulting data to establish production
+     classification thresholds empirically.
+
+------------------------------------------------------------
+END OF HP-09 VALIDATION REPORT
+============================================================
+"""
+
+    return report.strip()
+
+
+def save_report() -> None:
+    REPORT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    report = generate_report()
+
+    REPORT_PATH.write_text(
+        report,
+        encoding="utf-8",
+    )
+
+    print(report)
+
+    print()
+    print("=" * 60)
+    print(f"Report saved to: {REPORT_PATH}")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    save_report()

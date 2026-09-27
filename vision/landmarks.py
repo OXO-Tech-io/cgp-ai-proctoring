@@ -15,6 +15,7 @@ class FaceLandmarkerWrapper:
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceLandmarkerOptions(base_options=base_options)
         self.landmarker = vision.FaceLandmarker.create_from_options(options)
+        self.last_detection_time_ms = 0.0
         print("Loaded successfully")
         self._timings = []
 
@@ -25,6 +26,8 @@ class FaceLandmarkerWrapper:
         start = time.perf_counter()
         detection_result = self.landmarker.detect(mp_image)
         elapsed_ms = (time.perf_counter() - start) * 1000
+
+        self.last_detection_time_ms = elapsed_ms
         # print(f"Detection time: {elapsed_ms:.2f} ms")
 
         self._timings.append(elapsed_ms)
@@ -39,7 +42,6 @@ class FaceLandmarkerWrapper:
                     x = int(landmark.x * frame.shape[1])
                     y = int(landmark.y * frame.shape[0])
                     cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
-                    print(f"Landmark: ({x}, {y})")
 
                 for idx in SOLVEPNP_6POINT:
                     lm = face_landmarks[idx]
