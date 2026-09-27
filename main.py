@@ -1,6 +1,6 @@
 import time
 import cv2
-
+from uuid import uuid4
 from vision.landmarks import FaceLandmarkerWrapper
 from vision.head_pose import HeadPoseEstimator
 from validation.data_logger import PoseDataLogger
@@ -28,7 +28,7 @@ height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 head_pose = HeadPoseEstimator(width, height)
 
 pose_logger = PoseDataLogger(
-    "validation/data/pose_measurements.csv"
+    f"validation/data/live/pose_{uuid4().hex}.csv"
 )
 
 pose_logger.start()

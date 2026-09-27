@@ -46,37 +46,22 @@ class PoseDataLogger:
         relative_yaw: float | None,
         relative_roll: float | None,
         detection_time_ms: float | None,
-    ):
+    ) -> None:
+        """Log a single head-pose measurement to the CSV dataset."""
         if self.writer is None:
             return
 
-        self.writer.writerow([
-            datetime.now().isoformat(timespec="milliseconds"),
-            test,
-            sample,
-            f"{pitch:.4f}",
-            f"{yaw:.4f}",
-            f"{roll:.4f}",
-            (
-                f"{relative_pitch:.4f}"
-                if relative_pitch is not None
-                else ""
-            ),
-            (
-                f"{relative_yaw:.4f}"
-                if relative_yaw is not None
-                else ""
-            ),
-            (
-                f"{relative_roll:.4f}"
-                if relative_roll is not None
-                else ""
-            ),
-            (
-                f"{detection_time_ms:.4f}"
-                if detection_time_ms is not None
-                else ""
-            ),
+        self.writer.writerow([ 
+            datetime.now().isoformat(timespec="milliseconds"), 
+            test, 
+            sample, 
+            f"{pitch:.4f}", 
+            f"{yaw:.4f}", 
+            f"{roll:.4f}", 
+            f"{relative_pitch:.4f}" if relative_pitch is not None else "", 
+            f"{relative_yaw:.4f}" if relative_yaw is not None else "", 
+            f"{relative_roll:.4f}" if relative_roll is not None else "", 
+            f"{detection_time_ms:.4f}" if detection_time_ms is not None else "", 
         ])
 
         self.file.flush()

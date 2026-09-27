@@ -36,20 +36,14 @@ def assess_stability(jitter_result):
     if mean_abs <= JITTER_WARNING_THRESHOLD:
         return "STABLE"
 
-    if mean_abs <= JITTER_INVESTIGATION_THRESHOLD:
+    elif mean_abs <= JITTER_INVESTIGATION_THRESHOLD:
         return "ELEVATED JITTER"
-
-    return "HIGH JITTER"
+    else:
+        return "HIGH JITTER"
 
 
 def access_coupling(coupling_ratio):
-    if coupling_ratio >= COUPLING_INVESTIGATION_THRESHOLD:
-        return "INVESTIGATE"
-
-    return "NO MAJOR FLAG"
-
-
-
+    return "INVESTIGATE" if coupling_ratio >= COUPLING_INVESTIGATION_THRESHOLD else "NO MAJOR FLAG"
 
 
 def load_dataset():
@@ -118,20 +112,11 @@ def analyze_pose_statistics(rows):
         print(f"TEST: {test_name}")
         print("=" * 60)
 
-        pitch = [
-            float(row["pitch"])
-            for row in test_rows
-        ]
+        pitch = [float(row["pitch"])for row in test_rows]
 
-        yaw = [
-            float(row["yaw"])
-            for row in test_rows
-        ]
+        yaw = [float(row["yaw"])for row in test_rows]
 
-        roll = [
-            float(row["roll"])
-            for row in test_rows
-        ]
+        roll = [float(row["roll"])for row in test_rows]
 
         print()
         print("RAW POSE")
@@ -147,20 +132,11 @@ def analyze_pose_statistics(rows):
         ]
 
         if relative_rows:
-            relative_pitch = [
-                float(row["relative_pitch"])
-                for row in relative_rows
-            ]
+            relative_pitch = [float(row["relative_pitch"])for row in relative_rows]
 
-            relative_yaw = [
-                float(row["relative_yaw"])
-                for row in relative_rows
-            ]
+            relative_yaw = [float(row["relative_yaw"])for row in relative_rows]
 
-            relative_roll = [
-                float(row["relative_roll"])
-                for row in relative_rows
-            ]
+            relative_roll = [float(row["relative_roll"])for row in relative_rows]
 
             print()
             print("RELATIVE POSE")
@@ -712,20 +688,11 @@ def analyze_cross_axis_coupling(rows):
         print()
         print(" Coupling ratios")
 
-        print(
-            f"   Pitch / Primary : "
-            f"{result['pitch_coupling']:.3f}"
-        )
+        print(f"   Pitch / Primary : "f"{result['pitch_coupling']:.3f}")
 
-        print(
-            f"   Yaw / Primary   : "
-            f"{result['yaw_coupling']:.3f}"
-        )
+        print(f"   Yaw / Primary   : "f"{result['yaw_coupling']:.3f}")
 
-        print(
-            f"   Roll / Primary  : "
-            f"{result['roll_coupling']:.3f}"
-        )
+        print(f"   Roll / Primary  : "f"{result['roll_coupling']:.3f}")
 
 def calculate_latency_statistics(values):
     values = np.array(values, dtype=np.float64)
