@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from validation.key_labels import digit_key_labels
+
 
 @dataclass
 class PoseSample:
@@ -11,15 +13,17 @@ class PoseSample:
 
 
 class PoseTestRecorder:
-    TESTS = {
-        ord("1"): "NEUTRAL",
-        ord("2"): "TURN LEFT",
-        ord("3"): "TURN RIGHT",
-        ord("4"): "LOOK UP",
-        ord("5"): "LOOK DOWN",
-        ord("6"): "TILT LEFT",
-        ord("7"): "TILT RIGHT",
-    }
+    TESTS = digit_key_labels(
+        [
+            "NEUTRAL",
+            "TURN LEFT",
+            "TURN RIGHT",
+            "LOOK UP",
+            "LOOK DOWN",
+            "TILT LEFT",
+            "TILT RIGHT",
+        ]
+    )
 
     def __init__(self, sample_count: int = 50):
         self.sample_count = sample_count

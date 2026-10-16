@@ -1,91 +1,185 @@
 import time
-import cv2
+from typing import Sequence
 from uuid import uuid4
-from vision.landmarks import FaceLandmarkerWrapper
-from vision.head_pose import HeadPoseEstimator
-from validation.data_logger import PoseDataLogger
 
+import cv2
+import numpy as np
+
+from config import gaze_config as cfg
+from validation.data_logger import PoseDataLogger
+from validation.gaze_logger import GazeDataLogger
+from validation.guided_session import GuidedSession
+from validation.key_labels import digit_key_labels
+from vision.gaze.gaze_pipeline import (
+    CalibrationEvent,
+    CalibrationStatus,
+    GazePipeline,
+    GazeResult,
+)
+from vision.gaze.types import Landmark
+from vision.head_pose import HeadPoseEstimator
+from vision.landmarks import FaceLandmarkerWrapper
+
+DEBUG = False  # per-frame console prints
 
 MODEL_PATH = "/home/aanish/cgp-ai-proctoring/face_landmarker.task"
 
-
-landmarker = FaceLandmarkerWrapper(MODEL_PATH)
-
-cap = cv2.VideoCapture(0)
-
-if not cap.isOpened():
-    raise RuntimeError("Failed to open the webcam stream.")
-
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-
-# Get actual camera resolution
-width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-# Initialize head pose estimator once
-head_pose = HeadPoseEstimator(width, height)
-
-pose_logger = PoseDataLogger(
-    f"validation/data/live/pose_{uuid4().hex}.csv"
+SESSION_KEYS = digit_key_labels(
+    ["A_BASELINE", "B_EYES_ONLY", "C_HEAD_YAW", "D_HEAD_PITCH"]
 )
 
-pose_logger.start()
+GREEN = (0, 255, 0)
+YELLOW = (0, 255, 255)
+ORANGE = (0, 165, 255)
 
 
-print("====================================================")
-print("Webcam capture loop active.")
-print("-> Press [Q] to quit")
-print("====================================================")
-
-
-prev_time = time.time()
-fps = 0
-
-
-while cap.isOpened():
-
-    success, frame = cap.read()
-
-    if not success:
-        continue
-
-   
-
-    # FPS
-    curr_time = time.time()
-    fps = (
-        1 / (curr_time - prev_time)
-        if curr_time != prev_time
-        else fps
+def put_text(
+    frame: np.ndarray,
+    text: str,
+    y: int,
+    color: tuple[int, int, int] = GREEN,
+    scale: float = 0.8,
+) -> None:
+    cv2.putText(
+        frame, text, (30, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2, cv2.LINE_AA
     )
-    prev_time = curr_time
 
 
-    # ----------------------------------------
-    # MediaPipe Face Landmarks
-    # ----------------------------------------
+def turn_state(yaw: float, pitch: float) -> str:
+    if yaw < -10.0:
+        return "Turn Left"
+    elif yaw > 10.0:
+        return "Turn Right"
+    elif pitch < -10.0:
+        return "Turn Up"
+    elif pitch > 10.0:
+        return "Turn Down"
+    else:
+        return "CENTER"
 
-    faces = landmarker.detect(frame)
+
+def format_calibration_status(status: CalibrationStatus) -> str:
+    """On-screen calibration text."""
+    if status.phase == "WAITING":
+        return f"Calibrating in {status.remaining_s:.0f}s - look at the center"
+    return f"Calibrating {status.samples}/{status.required} - hold still"
 
 
-    # ----------------------------------------
-    # Head Pose Estimation
-    # ----------------------------------------
-
-    if faces:
-
-        # Use first detected face
-        face_landmarks = faces[0]
-
-        pitch, yaw, roll = head_pose.estimate(
-            face_landmarks,
-            width,
-            height,
+def format_calibration_event(event: CalibrationEvent) -> str:
+    """Console line for a one-off calibration milestone."""
+    d = event.data
+    if event.kind == "SAMPLE":
+        return f"Gaze calibration: {d['samples']:.0f}/{d['required']:.0f}"
+    elif event.kind == "SPREAD":
+        return (
+            f"Calibration spread: lx={d['left_x']:.4f}, ly={d['left_y']:.4f}, "
+            f"rx={d['right_x']:.4f}, ry={d['right_y']:.4f} | head std: "
+            f"yaw={d['head_yaw']:.2f}, pitch={d['head_pitch']:.2f} deg"
+        )
+    elif event.kind == "UNSTABLE":
+        return (
+            f"Calibration unstable (iris std > {d['iris_threshold']} or "
+            f"head std > {d['head_threshold']} deg). "
+            "Restarting - keep head still, look at center."
+        )
+    else:
+        return (
+            "\n========================================\n"
+            "Gaze calibration complete.\n"
+            f"Left neutral: ({d['left_neutral_x']:.4f}, {d['left_neutral_y']:.4f})\n"
+            f"Right neutral: ({d['right_neutral_x']:.4f}, {d['right_neutral_y']:.4f})\n"
+            f"Neutral pose: yaw={d['neutral_yaw']:+.2f}, pitch={d['neutral_pitch']:+.2f}\n"
+            "========================================\n"
         )
 
-        pose_logger.log(
+
+class LiveSession:
+    """Webcam loop: head pose + gaze estimation with on-screen overlay and CSV logging."""
+
+    def __init__(self) -> None:
+        self.landmarker = FaceLandmarkerWrapper(MODEL_PATH)
+
+        self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            raise RuntimeError("Failed to open the webcam stream.")
+
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        self.head_pose = HeadPoseEstimator(self.width, self.height)
+        self.gaze_pipeline = GazePipeline()
+
+        self.session_label = "NONE"
+        self.guided = GuidedSession()
+        self.target_label = ""
+
+        self.pose_logger = PoseDataLogger(f"validation/data/live/pose_{uuid4().hex}.csv")
+        self.pose_logger.start()
+
+        self.gaze_logger = GazeDataLogger(f"validation/data/live/gaze_{uuid4().hex}.csv")
+        self.gaze_logger.start()
+
+        self.prev_time = time.time()
+        self.fps = 0.0
+
+    def print_banner(self) -> None:
+        print("====================================================")
+        print("Webcam capture loop active.")
+        print("-> Press [Q] to quit, [C] to recalibrate gaze")
+        print("-> Keys 1-4 set the session label (A/B/C/D)")
+        print("-> Key 5 runs the guided eye-movement session (after calibration)")
+        print("-> Gaze calibration: look at the center of the screen, keep head still")
+        print("====================================================")
+
+    def run(self) -> None:
+        self.print_banner()
+
+        while self.cap.isOpened():
+            success, frame = self.cap.read()
+
+            if not success:
+                continue
+
+            self._update_fps()
+            self._process_frame(frame)
+
+            cv2.imshow("Webcam Capture", frame)
+
+            if self._handle_key(cv2.waitKey(1) & 0xFF):
+                break
+
+    def close(self) -> None:
+        self.landmarker.landmarker.close()
+        self.cap.release()
+        self.pose_logger.close()
+        self.gaze_logger.close()
+        cv2.destroyAllWindows()
+
+    def _update_fps(self) -> None:
+        curr_time = time.time()
+        if curr_time != self.prev_time:
+            self.fps = 1 / (curr_time - self.prev_time)
+        self.prev_time = curr_time
+
+    def _process_frame(self, frame: np.ndarray) -> None:
+        faces = self.landmarker.detect(frame)
+
+        if faces:
+            self._process_face(frame, faces[0])
+        else:
+            self.gaze_pipeline.on_face_lost()
+
+        put_text(frame, f"FPS: {self.fps:.1f}", 40, scale=1)
+
+    def _process_face(self, frame: np.ndarray, face_landmarks: Sequence[Landmark]) -> None:
+        pitch, yaw, roll = self.head_pose.estimate(
+            face_landmarks, self.width, self.height
+        )
+
+        self.pose_logger.log(
             test="LIVE",
             sample=0,
             yaw=yaw,
@@ -94,64 +188,119 @@ while cap.isOpened():
             relative_pitch=None,
             relative_yaw=None,
             relative_roll=None,
-            detection_time_ms=landmarker.last_detection_time_ms,
+            detection_time_ms=self.landmarker.last_detection_time_ms,
         )
 
-        # Display head pose
-        cv2.putText(
-            frame,
-            f"Pitch: {pitch:.1f}",
-            (30, 80),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA,
+        result = self.gaze_pipeline.update(face_landmarks, yaw, pitch)
+
+        self._update_guided_session(frame)
+
+        for event in result.events:
+            print(format_calibration_event(event))
+
+        if result.calibration is not None:
+            put_text(frame, format_calibration_status(result.calibration), 290, ORANGE)
+
+        if result.has_gaze:
+            self._log_gaze(result, pitch, yaw, roll)
+
+        put_text(frame, f"Pitch: {pitch:.1f}", 80)
+        put_text(frame, f"Yaw: {yaw:.1f}", 115)
+        put_text(frame, f"Roll: {roll:.1f}", 150)
+        put_text(frame, turn_state(yaw, pitch), 185)
+
+        if result.label is not None:
+            put_text(
+                frame,
+                f"Gaze: {result.label}{'' if result.reliable else ' (?)'}",
+                220,
+            )
+        elif result.status == "BLINK" and result.calibrated:
+            put_text(frame, "Gaze: (eyes closed)", 220, ORANGE)
+
+        put_text(frame, f"Session: {self.session_label}", 255, YELLOW)
+
+    def _update_guided_session(self, frame: np.ndarray) -> None:
+        step = self.guided.update(time.time())
+        if step is not None:
+            self.target_label, prompt = step
+            put_text(frame, prompt, 330, YELLOW, 1.2)
+        elif self.target_label:
+            self.target_label = ""
+            self.session_label = "NONE"
+            print("Guided session finished.")
+
+    def _log_gaze(self, result: GazeResult, pitch: float, yaw: float, roll: float) -> None:
+        self.gaze_logger.log(
+            left_iris=result.left_iris,
+            left_normalized=result.left_normalized,
+            left_offset=result.left_offset,
+            right_iris=result.right_iris,
+            right_normalized=result.right_normalized,
+            right_offset=result.right_offset,
+            left_compensated=result.left_compensated,
+            right_compensated=result.right_compensated,
+            gaze=result.gaze,
+            pitch=pitch,
+            yaw=yaw,
+            roll=roll,
+            delta_yaw=result.delta_yaw,
+            delta_pitch=result.delta_pitch,
+            detection_time_ms=self.landmarker.last_detection_time_ms,
+            filtered=result.filtered,
+            reliable=result.reliable,
+            gaze_label=result.label,
+            session=self.session_label,
+            target=self.target_label,
         )
 
-        cv2.putText(
-            frame,
-            f"Yaw: {yaw:.1f}",
-            (30, 115),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA,
-        )
+        if DEBUG:
+            print(
+                f"Gaze | {result.status} yaw={yaw:+.2f} pitch={pitch:+.2f} | "
+                f"raw=({result.left_offset[0]:+.4f},{result.left_offset[1]:+.4f}) "
+                f"comp=({result.gaze[0]:+.4f},{result.gaze[1]:+.4f}) "
+                f"filt=({result.filtered[0]:+.4f},{result.filtered[1]:+.4f}) "
+                f"{result.label}"
+            )
 
-        cv2.putText(
-            frame,
-            f"Roll: {roll:.1f}",
-            (30, 150),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA,
-        )
+    def _handle_key(self, key: int) -> bool:
+        """Apply a keypress. Returns True when the user asked to quit."""
+        if key in SESSION_KEYS:
+            self.session_label = SESSION_KEYS[key]
+            print(f"Session -> {self.session_label}")
 
+        if key == ord("5"):
+            if self.gaze_pipeline.calibrated:
+                self.session_label = "B_EYES_ONLY"
+                self.guided.start(time.time())
+                print("Guided session started: follow the on-screen prompts, move only your eyes.")
+            else:
+                print("Calibrate first (wait for 'Gaze calibration complete').")
 
-    # FPS
-    cv2.putText(
-        frame,
-        f"FPS: {fps:.1f}",
-        (30, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (0, 255, 0),
-        2,
-        cv2.LINE_AA,
-    )
+        if key == ord("c"):
+            self.guided.stop()
+            self.target_label = ""
 
+            self.gaze_pipeline.start_calibration()
 
-    cv2.imshow("Webcam Capture", frame)
+            print("\n========================================")
+            print("Gaze calibration started.")
+            print("Look naturally at the center of the screen.")
+            print(f"Collecting {cfg.CALIB_SAMPLES} samples...")
+            print("========================================\n")
 
-
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+        return key == ord("q")
 
 
-cap.release()
-pose_logger.close()
-cv2.destroyAllWindows()
+def main() -> None:
+    session = LiveSession()
+    try:
+        session.run()
+    except KeyboardInterrupt:
+        print("\nInterrupted - shutting down.")
+    finally:
+        session.close()
+
+
+if __name__ == "__main__":
+    main()
