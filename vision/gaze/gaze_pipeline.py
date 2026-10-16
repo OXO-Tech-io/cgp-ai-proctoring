@@ -1,5 +1,6 @@
 import time
 from dataclasses import dataclass, field
+from typing import Any, Callable, Sequence
 
 from config import gaze_config as cfg
 from vision.gaze.eye_normalizer import EyeNormalizer, is_eye_open
@@ -7,6 +8,7 @@ from vision.gaze.gaze_calibrator import GazeCalibrator
 from vision.gaze.gaze_filter import GazeFilter
 from vision.gaze.head_pose_compensator import HeadPoseCompensator
 from vision.gaze.iris_tracker import IrisExtractor
+from vision.gaze.types import Landmark
 from vision.gaze.landmark_mapping import (
     LEFT_EYE_INNER_CORNER,
     LEFT_EYE_OUTER_CORNER,
@@ -38,6 +40,34 @@ def classify_gaze(
 
 
 @dataclass
+class CalibrationStatus:
+    """Where calibration is right now; the caller decides how to show it.
+
+    phase: WAITING (countdown before sampling) or COLLECTING.
+    """
+
+    phase: str
+    remaining_s: float = 0.0
+    samples: int = 0
+    required: int = 0
+
+
+@dataclass
+class CalibrationEvent:
+    """One-off calibration milestone for the caller to log or print.
+
+    kind: SAMPLE, SPREAD, UNSTABLE, or COMPLETE. `data` holds the numbers:
+      SAMPLE   samples, required
+      SPREAD   left_x, left_y, right_x, right_y, head_yaw, head_pitch
+      UNSTABLE iris_threshold, head_threshold
+      COMPLETE the baseline dict (neutral iris positions and neutral pose)
+    """
+
+    kind: str
+    data: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
 class GazeResult:
     """Output of one pipeline update.
 
@@ -47,8 +77,8 @@ class GazeResult:
 
     status: str
     calibrated: bool
-    message: str | None = None          # on-screen calibration text
-    events: list[str] = field(default_factory=list)  # lines to print once
+    calibration: CalibrationStatus | None = None
+    events: list[CalibrationEvent] = field(default_factory=list)
     label: str | None = None
     reliable: bool = False
     left_iris: tuple[float, float] | None = None
@@ -76,7 +106,7 @@ class GazePipeline:
     Holds all calibration/filter state so it can run without a webcam.
     """
 
-    def __init__(self, clock=time.time) -> None:
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
         self._clock = clock
         self._iris = IrisExtractor(LEFT_IRIS_INDICES, RIGHT_IRIS_INDICES)
         self._filter = GazeFilter(
@@ -120,7 +150,9 @@ class GazePipeline:
     # Per-frame update
     # ------------------------------------------------------------------
 
-    def update(self, landmarks, yaw: float, pitch: float) -> GazeResult:
+    def update(
+        self, landmarks: Sequence[Landmark], yaw: float, pitch: float
+    ) -> GazeResult:
         left_inner = landmarks[LEFT_EYE_INNER_CORNER]
         left_outer = landmarks[LEFT_EYE_OUTER_CORNER]
         left_top = landmarks[LEFT_EYE_TOP]
@@ -130,13 +162,13 @@ class GazePipeline:
         right_top = landmarks[RIGHT_EYE_TOP]
         right_bottom = landmarks[RIGHT_EYE_BOTTOM]
 
-        calibrating_msg = self._calibration_message()
+        calibration = self._calibration_status()
 
         if not (
             is_eye_open(left_inner.x, left_outer.x, left_top.y, left_bottom.y)
             and is_eye_open(right_inner.x, right_outer.x, right_top.y, right_bottom.y)
         ):
-            return GazeResult("BLINK", self.calibrated, message=calibrating_msg)
+            return GazeResult("BLINK", self.calibrated, calibration=calibration)
 
         left_iris, right_iris = self._iris.extract(landmarks)
         left_center = self._iris.calculate_center(left_iris)
@@ -151,7 +183,7 @@ class GazePipeline:
             right_inner.x, right_outer.x, right_top.y, right_bottom.y,
         )
 
-        events: list[str] = []
+        events: list[CalibrationEvent] = []
         if not self.calibrated:
             if self._clock() >= self._calib_start_at:
                 events = self._collect_calibration(left_norm, right_norm, yaw, pitch)
@@ -159,7 +191,7 @@ class GazePipeline:
                 return GazeResult(
                     "CALIBRATING",
                     False,
-                    message=self._calibration_message(),
+                    calibration=self._calibration_status(),
                     events=events,
                 )
             # Calibration just finished; start estimating on the next frame.
@@ -173,23 +205,35 @@ class GazePipeline:
     # Internals
     # ------------------------------------------------------------------
 
-    def _calibration_message(self) -> str | None:
+    def _calibration_status(self) -> CalibrationStatus | None:
         if self.calibrated:
             return None
         remaining = self._calib_start_at - self._clock()
         if remaining > 0:
-            return f"Calibrating in {remaining:.0f}s - look at the center"
-        return (
-            f"Calibrating {self._calibrator.sample_count()}/"
-            f"{cfg.CALIB_SAMPLES} - hold still"
+            return CalibrationStatus("WAITING", remaining_s=remaining)
+        return CalibrationStatus(
+            "COLLECTING",
+            samples=self._calibrator.sample_count(),
+            required=cfg.CALIB_SAMPLES,
         )
 
-    def _collect_calibration(self, left_norm, right_norm, yaw, pitch) -> list[str]:
+    def _collect_calibration(
+        self,
+        left_norm: tuple[float, float],
+        right_norm: tuple[float, float],
+        yaw: float,
+        pitch: float,
+    ) -> list[CalibrationEvent]:
         cal = self._calibrator
         cal.add_samples(
             left_norm[0], left_norm[1], right_norm[0], right_norm[1], yaw, pitch
         )
-        events = [f"Gaze calibration: {cal.sample_count()}/{cfg.CALIB_SAMPLES}"]
+        events = [
+            CalibrationEvent(
+                "SAMPLE",
+                {"samples": cal.sample_count(), "required": cfg.CALIB_SAMPLES},
+            )
+        ]
 
         if not cal.is_ready():
             return events
@@ -197,10 +241,17 @@ class GazePipeline:
         spread = cal.get_spread()
         head = cal.get_head_spread()
         events.append(
-            f"Calibration spread: lx={spread['left_x']:.4f}, "
-            f"ly={spread['left_y']:.4f}, rx={spread['right_x']:.4f}, "
-            f"ry={spread['right_y']:.4f} | head std: "
-            f"yaw={head['yaw']:.2f}, pitch={head['pitch']:.2f} deg"
+            CalibrationEvent(
+                "SPREAD",
+                {
+                    "left_x": spread["left_x"],
+                    "left_y": spread["left_y"],
+                    "right_x": spread["right_x"],
+                    "right_y": spread["right_y"],
+                    "head_yaw": head["yaw"],
+                    "head_pitch": head["pitch"],
+                },
+            )
         )
 
         if not cal.is_stable(
@@ -208,27 +259,29 @@ class GazePipeline:
             head_threshold=cfg.CALIB_MAX_HEAD_STD_DEG,
         ):
             events.append(
-                f"Calibration unstable (iris std > {cfg.CALIB_MAX_IRIS_STD} or "
-                f"head std > {cfg.CALIB_MAX_HEAD_STD_DEG} deg). "
-                "Restarting - keep head still, look at center."
+                CalibrationEvent(
+                    "UNSTABLE",
+                    {
+                        "iris_threshold": cfg.CALIB_MAX_IRIS_STD,
+                        "head_threshold": cfg.CALIB_MAX_HEAD_STD_DEG,
+                    },
+                )
             )
             self.start_calibration()
             return events
 
         self._baseline = cal.get_calibration()
-        b = self._baseline
-        events.append(
-            "\n========================================\n"
-            "Gaze calibration complete.\n"
-            f"Left neutral: ({b['left_neutral_x']:.4f}, {b['left_neutral_y']:.4f})\n"
-            f"Right neutral: ({b['right_neutral_x']:.4f}, {b['right_neutral_y']:.4f})\n"
-            f"Neutral pose: yaw={b['neutral_yaw']:+.2f}, pitch={b['neutral_pitch']:+.2f}\n"
-            "========================================\n"
-        )
+        events.append(CalibrationEvent("COMPLETE", dict(self._baseline)))
         return events
 
     def _estimate(
-        self, left_center, right_center, left_norm, right_norm, yaw, pitch
+        self,
+        left_center: tuple[float, float],
+        right_center: tuple[float, float],
+        left_norm: tuple[float, float],
+        right_norm: tuple[float, float],
+        yaw: float,
+        pitch: float,
     ) -> GazeResult:
         b = self._baseline
         assert b is not None
@@ -240,7 +293,7 @@ class GazePipeline:
         delta_yaw = yaw - b["neutral_yaw"]
         delta_pitch = pitch - b["neutral_pitch"]
 
-        common = dict(
+        common: dict[str, Any] = dict(
             calibrated=True,
             left_iris=left_center,
             right_iris=right_center,

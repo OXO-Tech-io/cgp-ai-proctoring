@@ -1,5 +1,7 @@
 """Scripted eye-movement session: prompts the subject and tags each row."""
 
+from typing import Sequence
+
 # (target, seconds). TRANSITION rows are the first SETTLE_S of every step.
 SEQUENCE = [
     ("CENTER", 3.0),
@@ -16,7 +18,11 @@ SETTLE_S = 1.0
 
 
 class GuidedSession:
-    def __init__(self, sequence=SEQUENCE, settle_s: float = SETTLE_S) -> None:
+    def __init__(
+        self,
+        sequence: Sequence[tuple[str, float]] = SEQUENCE,
+        settle_s: float = SETTLE_S,
+    ) -> None:
         self.sequence = sequence
         self.settle_s = settle_s
         self._start: float | None = None
@@ -31,7 +37,7 @@ class GuidedSession:
     def stop(self) -> None:
         self._start = None
 
-    def update(self, now: float):
+    def update(self, now: float) -> tuple[str, str] | None:
         """Return (target, prompt) for this instant, or None when finished/inactive."""
         if self._start is None:
             return None

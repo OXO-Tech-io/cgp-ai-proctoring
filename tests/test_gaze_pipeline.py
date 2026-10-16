@@ -1,5 +1,7 @@
 from types import SimpleNamespace as P
 
+from validation.key_labels import digit_key_labels
+from vision import landmark_indices as li
 from vision.gaze import landmark_mapping as m
 from vision.landmark_indices import LEFT_IRIS_INDICES, RIGHT_IRIS_INDICES
 from vision.gaze.gaze_calibrator import GazeCalibrator
@@ -27,17 +29,19 @@ def make_landmarks(iris_dx=0.0, open_h=0.02):
         for i in iris:
             lm[i] = P(x=cx + iris_dx * 0.05, y=0.5)
 
+    # Subject's left eye appears on the image's right (larger x).
     eye(m.LEFT_EYE_INNER_CORNER, m.LEFT_EYE_OUTER_CORNER, m.LEFT_EYE_TOP,
-        m.LEFT_EYE_BOTTOM, LEFT_IRIS_INDICES, 0.4)
+        m.LEFT_EYE_BOTTOM, LEFT_IRIS_INDICES, 0.6)
     eye(m.RIGHT_EYE_INNER_CORNER, m.RIGHT_EYE_OUTER_CORNER, m.RIGHT_EYE_TOP,
-        m.RIGHT_EYE_BOTTOM, RIGHT_IRIS_INDICES, 0.6)
+        m.RIGHT_EYE_BOTTOM, RIGHT_IRIS_INDICES, 0.4)
     return lm
 
 
 def calibrated_pipeline():
     clock = Clock()
     p = GazePipeline(clock=clock)
-    assert p.update(make_landmarks(), 0, 0).message.startswith("Calibrating in")
+    status = p.update(make_landmarks(), 0, 0).calibration
+    assert status is not None and status.phase == "WAITING"
     clock.t = 5.0
     for _ in range(50):
         p.update(make_landmarks(), 0.0, 0.0)
@@ -101,3 +105,29 @@ def test_classify():
     assert classify_gaze(0, 0.5) == "CENTER"  # vertical disabled
     assert classify_gaze(0, 0.5, enable_vertical=True) == "DOWN"
     assert classify_gaze(0, -0.5, enable_vertical=True) == "UP"
+
+
+def test_calibration_status_and_events_are_structured():
+    clock = Clock()
+    p = GazePipeline(clock=clock)
+    clock.t = 5.0
+    r = p.update(make_landmarks(), 0.0, 0.0)
+    assert r.calibration.phase == "COLLECTING" and r.calibration.samples == 1
+    assert [e.kind for e in r.events] == ["SAMPLE"]
+
+
+def test_eye_landmarks_share_one_convention():
+    # The gaze mapping must agree with the head-pose indices.
+    assert m.LEFT_EYE_INNER_CORNER == li.LEFT_EYE_INNER_CORNER
+    assert m.LEFT_EYE_OUTER_CORNER == li.LEFT_EYE_OUTER_CORNER
+    assert m.RIGHT_EYE_INNER_CORNER == li.RIGHT_EYE_INNER_CORNER
+    assert m.RIGHT_EYE_OUTER_CORNER == li.RIGHT_EYE_OUTER_CORNER
+    # MediaPipe: 263/362 + iris 473-477 is the subject's left eye; 33/133 + 468-472 the right.
+    assert li.LEFT_EYE_OUTER_CORNER == 263 and li.LEFT_IRIS_INDICES[0] == 473
+    assert li.RIGHT_EYE_OUTER_CORNER == 33 and li.RIGHT_IRIS_INDICES[0] == 468
+    assert li.LEFT_IRIS_CENTER == li.LEFT_IRIS_INDICES[0]
+    assert li.RIGHT_IRIS_CENTER == li.RIGHT_IRIS_INDICES[0]
+
+
+def test_digit_key_labels():
+    assert digit_key_labels(["A", "B"]) == {ord("1"): "A", ord("2"): "B"}

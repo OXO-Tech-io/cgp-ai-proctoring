@@ -1,5 +1,7 @@
 from typing import Sequence
 
+from vision.gaze.types import Landmark
+
 
 class IrisExtractor:
     """Extract iris landmarks and calculate iris centers."""
@@ -12,7 +14,9 @@ class IrisExtractor:
         self.left_iris_indices = left_iris_indices
         self.right_iris_indices = right_iris_indices
 
-    def extract(self, landmarks):
+    def extract(
+        self, landmarks: Sequence[Landmark]
+    ) -> tuple[list[Landmark], list[Landmark]]:
         """Extract left and right iris landmarks."""
 
         left_iris = [
@@ -28,7 +32,7 @@ class IrisExtractor:
         return left_iris, right_iris
 
     @staticmethod
-    def calculate_center(landmarks) -> tuple[float, float]:
+    def calculate_center(landmarks: Sequence[Landmark]) -> tuple[float, float]:
         """Calculate the center point of an iris."""
 
         x = sum(point.x for point in landmarks) / len(landmarks)

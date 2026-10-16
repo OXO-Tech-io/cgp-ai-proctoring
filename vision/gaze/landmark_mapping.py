@@ -1,11 +1,28 @@
-# Eye around the iris currently labeled LEFT_IRIS
-LEFT_EYE_INNER_CORNER = 133
-LEFT_EYE_OUTER_CORNER = 33
-LEFT_EYE_TOP = 159
-LEFT_EYE_BOTTOM = 145
+"""Per-eye landmark indices used by the gaze pipeline.
 
-# Eye around the iris currently labeled RIGHT_IRIS
-RIGHT_EYE_INNER_CORNER = 362
-RIGHT_EYE_OUTER_CORNER = 263
-RIGHT_EYE_TOP = 386
-RIGHT_EYE_BOTTOM = 374
+Single source of truth is vision/landmark_indices.py (subject's left/right),
+so the gaze code can never disagree with the head-pose code about which eye
+is which.
+"""
+
+from vision.landmark_indices import (
+    LEFT_EYE_BOTTOM,
+    LEFT_EYE_INNER_CORNER,
+    LEFT_EYE_OUTER_CORNER,
+    LEFT_EYE_TOP,
+    RIGHT_EYE_BOTTOM,
+    RIGHT_EYE_INNER_CORNER,
+    RIGHT_EYE_OUTER_CORNER,
+    RIGHT_EYE_TOP,
+)
+
+__all__ = [
+    "LEFT_EYE_BOTTOM",
+    "LEFT_EYE_INNER_CORNER",
+    "LEFT_EYE_OUTER_CORNER",
+    "LEFT_EYE_TOP",
+    "RIGHT_EYE_BOTTOM",
+    "RIGHT_EYE_INNER_CORNER",
+    "RIGHT_EYE_OUTER_CORNER",
+    "RIGHT_EYE_TOP",
+]
