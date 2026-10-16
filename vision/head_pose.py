@@ -159,8 +159,16 @@ class HeadPoseEstimator:
             [x, y, z]
         )
 
+        roll = float(angles[2])
+        # Frontal face returns ~180 due to y-down convention.
+        # Wrap to [-90, 90] so upright ~= 0.
+        if roll > 90.0:
+            roll -= 180.0
+        elif roll < -90.0:
+            roll += 180.0
+
         return (
             float(angles[0]),  # pitch
             float(angles[1]),  # yaw
-            float(angles[2]),  # roll
+            roll,  # roll
         )
