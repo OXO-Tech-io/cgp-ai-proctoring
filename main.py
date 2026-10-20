@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from config import gaze_config as cfg
+from temporal import FrameSample, SessionRecorder, SlidingWindow
 from validation.data_logger import PoseDataLogger
 from validation.gaze_logger import GazeDataLogger
 from validation.guided_session import GuidedSession
@@ -19,8 +20,11 @@ from vision.gaze.gaze_pipeline import (
 from vision.gaze.types import Landmark
 from vision.head_pose import HeadPoseEstimator
 from vision.landmarks import FaceLandmarkerWrapper
+from temporal import DeviationThresholds, GazeDetector, HeadDetector
+from temporal.events import EventBuilder, RepeatTracker
+from temporal.output import EventLog
 
-DEBUG = False  # per-frame console prints
+DEBUG = False  
 
 MODEL_PATH = "/home/aanish/cgp-ai-proctoring/face_landmarker.task"
 
@@ -94,7 +98,8 @@ def format_calibration_event(event: CalibrationEvent) -> str:
 
 
 class LiveSession:
-    """Webcam loop: head pose + gaze estimation with on-screen overlay and CSV logging."""
+    """Webcam loop: head pose + gaze estimation with on-screen overlay,
+    CSV logging, and Phase 3 temporal recording."""
 
     def __init__(self) -> None:
         self.landmarker = FaceLandmarkerWrapper(MODEL_PATH)
@@ -125,6 +130,23 @@ class LiveSession:
         self.prev_time = time.time()
         self.fps = 0.0
 
+        # Phase 3: temporal layer
+        self.window = SlidingWindow(duration_s=3.0)
+        self.frame_idx = 0
+        self.recording_path = f"data/sessions/{int(time.time())}.jsonl"
+        self.session_id = uuid4().hex
+        meta = {"camera": 0, "width": self.width, "height": self.height}
+        self.recorder = SessionRecorder(self.recording_path, session_id=self.session_id, meta=meta)
+        self.recorder.__enter__()
+
+        self.thresholds = DeviationThresholds(gaze_yaw_enter=0.055)
+        self.event_logs = EventLog(self.recording_path, self.session_id, self.thresholds, meta=meta)
+        self.gaze_det: GazeDetector | None = None
+        self.head_det: HeadDetector | None = None
+        self.head_events = None
+        self.gaze_events = None
+        self.repeats = RepeatTracker()
+
     def print_banner(self) -> None:
         print("====================================================")
         print("Webcam capture loop active.")
@@ -152,10 +174,20 @@ class LiveSession:
                 break
 
     def close(self) -> None:
+        now = time.monotonic()
+        for name, det, builder in (("HEAD", self.head_det, self.head_events),
+                                   ("GAZE", self.gaze_det, self.gaze_events)):
+            if det is not None:
+                transitions, episode = det.finish(now)
+                self._report(name, transitions, episode)
+                self._events(builder, transitions, episode, None)
         self.landmarker.landmarker.close()
         self.cap.release()
         self.pose_logger.close()
         self.gaze_logger.close()
+        self.recorder.__exit__(None, None, None)
+        path = self.event_logs.write()
+        print(f"Events Written to {path}")
         cv2.destroyAllWindows()
 
     def _update_fps(self) -> None:
@@ -164,17 +196,75 @@ class LiveSession:
             self.fps = 1 / (curr_time - self.prev_time)
         self.prev_time = curr_time
 
+    def _emit_sample(
+        self,
+        face_count: int,
+        yaw: float | None = None,
+        pitch: float | None = None,
+        roll: float | None = None,
+        gaze_yaw: float | None = None,
+        gaze_pitch: float | None = None,
+    ) -> None:
+        """Build one FrameSample per frame; record it and push it to the window."""
+        sample = FrameSample(
+            ts=time.monotonic(),
+            frame_idx=self.frame_idx,
+            face_count=face_count,
+            confidence=1.0 if face_count else 0.0,
+            head_yaw=yaw,
+            head_pitch=pitch,
+            head_roll=roll,
+            gaze_yaw=gaze_yaw,
+            gaze_pitch=gaze_pitch,
+        )
+        self.frame_idx += 1
+        self.recorder.write(sample)
+        self.window.push(sample)
+
+        if self.gaze_det is not None and self.head_det is not None:
+            h = self.head_det.update(sample)
+            g = self.gaze_det.update(sample, block=self.head_det.block_gaze(),
+                                     head_score=self.head_det.last_score)
+            for name, (trans, ep), builder in (("HEAD", h, self.head_events),
+                                               ("GAZE", g, self.gaze_events)):
+                self._report(name, trans, ep)
+                self._events(builder, trans, ep, sample)
+
     def _process_frame(self, frame: np.ndarray) -> None:
         faces = self.landmarker.detect(frame)
 
         if faces:
-            self._process_face(frame, faces[0])
+            self._process_face(frame, faces[0], face_count=len(faces))
         else:
             self.gaze_pipeline.on_face_lost()
+            self._emit_sample(face_count=0)
 
         put_text(frame, f"FPS: {self.fps:.1f}", 40, scale=1)
 
-    def _process_face(self, frame: np.ndarray, face_landmarks: Sequence[Landmark]) -> None:
+    def _report(self, name, transitions, episode) -> None:
+        for t in transitions:
+            print(f"[{name}] {t.old.value} -> {t.new.value} ({t.reason})")
+        if episode is not None:
+            print(f"[{name}] EPISODE {episode.end_reason}: "
+                  f"{episode.deviating_s:.1f}s deviating, peak {episode.peak:.2f}x threshold")
+
+
+    def _events(self, builder, transitions, episode, sample) -> None:
+        if builder is None:
+            if episode is not None:
+                print("[WARN] an episode closed but its event builder is missing - check main.py")
+            return
+        for ev in builder.update(sample, transitions, episode):
+            for out in self.repeats.add(ev):
+                print(f"[EVENT] {out.summary()}")
+                self.event_logs.add(out)
+
+    def _process_face(
+        self,
+        frame: np.ndarray,
+        face_landmarks: Sequence[Landmark],
+        face_count: int = 1,
+    ) -> None:
         pitch, yaw, roll = self.head_pose.estimate(
             face_landmarks, self.width, self.height
         )
@@ -193,10 +283,28 @@ class LiveSession:
 
         result = self.gaze_pipeline.update(face_landmarks, yaw, pitch)
 
+        gaze_ok = result.has_gaze and result.reliable and result.filtered is not None
+        self._emit_sample(
+            face_count=face_count,
+            yaw=yaw,
+            pitch=pitch,
+            roll=roll,
+            gaze_yaw=result.filtered[0] if gaze_ok else None,
+            gaze_pitch=result.filtered[1] if gaze_ok else None,
+        )
+
         self._update_guided_session(frame)
+       
 
         for event in result.events:
-            print(format_calibration_event(event))
+            if event.kind not in ("SAMPLE", "SPREAD", "UNSTABLE"):
+                d = event.data
+                self.gaze_det = GazeDetector(self.thresholds)
+                self.head_det = HeadDetector(d["neutral_yaw"], d["neutral_pitch"], self.thresholds)
+                self.head_events = EventBuilder.for_head(d["neutral_yaw"], d["neutral_pitch"], self.thresholds)
+                self.gaze_events = EventBuilder.for_gaze(self.thresholds)
+                self.event_logs.add_calibration(d["neutral_yaw"], d["neutral_pitch"], time.monotonic())   # ← add this line
+                print(format_calibration_event(event))
 
         if result.calibration is not None:
             put_text(frame, format_calibration_status(result.calibration), 290, ORANGE)
@@ -281,7 +389,14 @@ class LiveSession:
             self.guided.stop()
             self.target_label = ""
 
+            self.gaze_det = None
+            self.head_det = None
+
+            self.head_events = None
+            self.gaze_events = None
+
             self.gaze_pipeline.start_calibration()
+            self.repeats = RepeatTracker()
 
             print("\n========================================")
             print("Gaze calibration started.")
