@@ -17,6 +17,7 @@ class TemporalMonitor:
 
     def reset(self) -> None:
         self.head = self.gaze = self.head_events = self.gaze_events = None
+        self.repeats = RepeatTracker(self.cfg)
 
     @property
     def ready(self) -> bool:

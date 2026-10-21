@@ -20,8 +20,7 @@ from vision.gaze.gaze_pipeline import (
 from vision.gaze.types import Landmark
 from vision.head_pose import HeadPoseEstimator
 from vision.landmarks import FaceLandmarkerWrapper
-from temporal import DeviationThresholds, GazeDetector, HeadDetector
-from temporal.events import EventBuilder, RepeatTracker
+from temporal import DeviationThresholds, TemporalMonitor
 from temporal.output import EventLog
 
 DEBUG = False  
@@ -141,11 +140,7 @@ class LiveSession:
 
         self.thresholds = DeviationThresholds(gaze_yaw_enter=0.055)
         self.event_logs = EventLog(self.recording_path, self.session_id, self.thresholds, meta=meta)
-        self.gaze_det: GazeDetector | None = None
-        self.head_det: HeadDetector | None = None
-        self.head_events = None
-        self.gaze_events = None
-        self.repeats = RepeatTracker()
+        self.monitor = TemporalMonitor(self.thresholds)
 
     def print_banner(self) -> None:
         print("====================================================")
@@ -174,13 +169,8 @@ class LiveSession:
                 break
 
     def close(self) -> None:
-        now = time.monotonic()
-        for name, det, builder in (("HEAD", self.head_det, self.head_events),
-                                   ("GAZE", self.gaze_det, self.gaze_events)):
-            if det is not None:
-                transitions, episode = det.finish(now)
-                self._report(name, transitions, episode)
-                self._events(builder, transitions, episode, None)
+        for ev in self.monitor.stop(time.monotonic()):
+            self.event_logs.add(ev)
         self.landmarker.landmarker.close()
         self.cap.release()
         self.pose_logger.close()
@@ -221,14 +211,8 @@ class LiveSession:
         self.recorder.write(sample)
         self.window.push(sample)
 
-        if self.gaze_det is not None and self.head_det is not None:
-            h = self.head_det.update(sample)
-            g = self.gaze_det.update(sample, block=self.head_det.block_gaze(),
-                                     head_score=self.head_det.last_score)
-            for name, (trans, ep), builder in (("HEAD", h, self.head_events),
-                                               ("GAZE", g, self.gaze_events)):
-                self._report(name, trans, ep)
-                self._events(builder, trans, ep, sample)
+        for ev in self.monitor.update(sample):
+            self.event_logs.add(ev)
 
     def _process_frame(self, frame: np.ndarray) -> None:
         faces = self.landmarker.detect(frame)
@@ -241,23 +225,6 @@ class LiveSession:
 
         put_text(frame, f"FPS: {self.fps:.1f}", 40, scale=1)
 
-    def _report(self, name, transitions, episode) -> None:
-        for t in transitions:
-            print(f"[{name}] {t.old.value} -> {t.new.value} ({t.reason})")
-        if episode is not None:
-            print(f"[{name}] EPISODE {episode.end_reason}: "
-                  f"{episode.deviating_s:.1f}s deviating, peak {episode.peak:.2f}x threshold")
-
-
-    def _events(self, builder, transitions, episode, sample) -> None:
-        if builder is None:
-            if episode is not None:
-                print("[WARN] an episode closed but its event builder is missing - check main.py")
-            return
-        for ev in builder.update(sample, transitions, episode):
-            for out in self.repeats.add(ev):
-                print(f"[EVENT] {out.summary()}")
-                self.event_logs.add(out)
 
     def _process_face(
         self,
@@ -294,16 +261,14 @@ class LiveSession:
         )
 
         self._update_guided_session(frame)
+        
        
 
         for event in result.events:
             if event.kind not in ("SAMPLE", "SPREAD", "UNSTABLE"):
                 d = event.data
-                self.gaze_det = GazeDetector(self.thresholds)
-                self.head_det = HeadDetector(d["neutral_yaw"], d["neutral_pitch"], self.thresholds)
-                self.head_events = EventBuilder.for_head(d["neutral_yaw"], d["neutral_pitch"], self.thresholds)
-                self.gaze_events = EventBuilder.for_gaze(self.thresholds)
-                self.event_logs.add_calibration(d["neutral_yaw"], d["neutral_pitch"], time.monotonic())   # ← add this line
+                self.monitor.start(d["neutral_yaw"], d["neutral_pitch"])
+                self.event_logs.add_calibration(d["neutral_yaw"], d["neutral_pitch"], time.monotonic())
                 print(format_calibration_event(event))
 
         if result.calibration is not None:
@@ -389,14 +354,8 @@ class LiveSession:
             self.guided.stop()
             self.target_label = ""
 
-            self.gaze_det = None
-            self.head_det = None
-
-            self.head_events = None
-            self.gaze_events = None
-
             self.gaze_pipeline.start_calibration()
-            self.repeats = RepeatTracker()
+            self.monitor.reset()
 
             print("\n========================================")
             print("Gaze calibration started.")

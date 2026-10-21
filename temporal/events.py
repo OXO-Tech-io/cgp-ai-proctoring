@@ -16,6 +16,7 @@ class EventConfig:
     min_peak: float = 1.0
     min_run_s: float = 0.2
     tail_frac: float = 0.35
+    repeat_min_peak: float = 1.3
 
 @dataclass(frozen=True)
 class Event:
@@ -85,9 +86,9 @@ def describe_run(run: list, floor: float, tail_frac: float = 0.0):
     axis, sign = max(mass, key=mass.get)
     on = [f for f in run if f[1 + axis] * sign >= floor]
     peak = max(f[1 + axis] * sign for f in on)
-    score = sorted((f[1 + axis] * sign for f in on), reverse=True)
-    ref =  score[min(2, len(score) - 1)]
-    cut = max(floor, tail_frac * peak)
+    scores = sorted((f[1 + axis] * sign for f in on), reverse=True)
+    ref = scores[min(2, len(scores) - 1)]       # 3rd-highest: a 1-2 frame spike cannot set the bar
+    cut = max(floor, tail_frac * ref)
     core = [f for f in on if f[1 + axis] * sign >= cut] or on
     crossed = [f[0] for f in core if f[1 + axis] * sign >= 1.0]
     start = crossed[0] if crossed else core[0][0]
@@ -178,7 +179,7 @@ class RepeatTracker:
 
     def add(self, ev: Event) -> List[Event]:
         out = [ev]
-        if ev.kind != "glance":
+        if ev.kind != "glance" or ev.peak < self.cfg.repeat_min_peak:
             return out
         dq = self._recent.setdefault(ev.source, deque())
         dq.append([ev, False])

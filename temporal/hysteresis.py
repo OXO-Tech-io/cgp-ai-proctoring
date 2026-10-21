@@ -20,7 +20,7 @@ class HysteresisConfig:
     lose_s: float = 5.0
     split_after_gap: bool = True
 
-    def __post_init(self) -> None:
+    def post_init(self) -> None:
         if not self.exit < self.enter:
             raise ValueError("exit must be lower than enrter")
         if min(self.suspect_s, self.return_s, self.bridge_s) < 0 or self.lose_s <= self.bridge_s:
